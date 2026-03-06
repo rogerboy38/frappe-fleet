@@ -1,5 +1,4 @@
-# Frappe Fleet Management System - Official frappe_docker Configuration
-# Based on: https://github.com/frappe/frappe_docker
+# Frappe Fleet Management System - Simplified Docker Configuration
 # ============================================================
 
 services:
@@ -21,7 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: unless-stopped
 
   # Redis for Cache
   redis-cache:
@@ -29,21 +28,21 @@ services:
     container_name: frappe_redis_cache
     networks:
       - frappe_network
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: unless-stopped
     volumes:
       - redis_cache_data:/data
 
-  # Redis for Queue (also used for socketio)
+  # Redis for Queue
   redis-queue:
     image: redis:7-alpine
     container_name: frappe_redis_queue
     networks:
       - frappe_network
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: unless-stopped
     volumes:
       - redis_queue_data:/data
 
-  # Configurator - Sets up database and redis configuration
+  # Configurator - Sets up bench configuration
   configurator:
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-${ERPNEXT_VERSION:-v16}}
     platform: linux/amd64
@@ -51,18 +50,19 @@ services:
     entrypoint: ["bash", "-c"]
     command:
       - |
-        ls -1 apps > sites/apps.txt;
-        bench set-config -g db_host $$DB_HOST;
-        bench set-config -gp db_port $$DB_PORT;
-        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
-        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
-        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
-        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+        ls -1 apps > sites/apps.txt 2>/dev/null || true;
+        bench set-config -g db_host mariadb || true;
+        bench set-config -gp db_port 3306 || true;
+        bench set-config -g redis_cache "redis://frappe_redis_cache:6379" || true;
+        bench set-config -g redis_queue "redis://frappe_redis_queue:6379" || true;
+        bench set-config -g redis_socketio "redis://frappe_redis_queue:6379" || true;
+        bench set-config -gp socketio_port 9000 || true;
+        echo "Configurator completed"
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      REDIS_CACHE: frappe_redis_cache:6379
+      REDIS_QUEUE: frappe_redis_queue:6379
       SOCKETIO_PORT: 9000
     volumes:
       - sites:/home/frappe/frappe-bench/sites
@@ -76,7 +76,7 @@ services:
         condition: service_started
       redis-queue:
         condition: service_started
-    restart: on-failure
+    restart: "no"
 
   # Backend - Main Frappe application
   backend:
@@ -86,8 +86,9 @@ services:
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      REDIS_CACHE: redis://frappe_redis_cache:6379
+      REDIS_QUEUE: redis://frappe_redis_queue:6379
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - apps:/home/frappe/frappe-bench/apps
@@ -102,23 +103,17 @@ services:
         condition: service_started
       redis-queue:
         condition: service_started
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: unless-stopped
 
   # Frontend - Nginx web server
   frontend:
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-${ERPNEXT_VERSION:-v16}}
     platform: linux/amd64
     container_name: frappe_frontend
-    command: ["nginx-entrypoint.sh"]
+    command: ["nginx"]
     environment:
       BACKEND: backend:8000
       SOCKETIO: websocket:9000
-      FRAPPE_SITE_NAME_HEADER: ${FRAPPE_SITE_NAME_HEADER:-$$host}
-      UPSTREAM_REAL_IP_ADDRESS: ${UPSTREAM_REAL_IP_ADDRESS:-127.0.0.1}
-      UPSTREAM_REAL_IP_HEADER: ${UPSTREAM_REAL_IP_HEADER:-X-Forwarded-For}
-      UPSTREAM_REAL_IP_RECURSIVE: ${UPSTREAM_REAL_IP_RECURSIVE:-off}
-      PROXY_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-120}
-      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-50m}
     volumes:
       - sites:/home/frappe/frappe-bench/sites
     networks:
@@ -128,7 +123,7 @@ services:
     depends_on:
       - backend
       - websocket
-    restart: ${RESTART_POLICY:-unless-stopped}
+    restart: unless-stopped
 
   # Websocket - SocketIO server
   websocket:
@@ -139,8 +134,9 @@ services:
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      REDIS_CACHE: frappe_redis_cache:6379
+      REDIS_QUEUE: frappe_redis_queue:6379
       SOCKETIO_PORT: 9000
     volumes:
       - sites:/home/frappe/frappe-bench/sites
@@ -150,11 +146,9 @@ services:
     depends_on:
       configurator:
         condition: service_completed_successfully
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
-    restart: ${RESTART_POLICY:-unless-stopped}
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
 
   # Queue Short - Worker for short tasks
   queue-short:
@@ -165,8 +159,9 @@ services:
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      REDIS_CACHE: frappe_redis_cache:6379
+      REDIS_QUEUE: frappe_redis_queue:6379
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - apps:/home/frappe/frappe-bench/apps
@@ -175,13 +170,10 @@ services:
     depends_on:
       configurator:
         condition: service_completed_successfully
-      mariadb:
-        condition: service_healthy
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
-    restart: ${RESTART_POLICY:-unless-stopped}
+      - mariadb
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
 
   # Queue Long - Worker for long-running tasks
   queue-long:
@@ -192,8 +184,9 @@ services:
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      REDIS_CACHE: frappe_redis_cache:6379
+      REDIS_QUEUE: frappe_redis_queue:6379
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - apps:/home/frappe/frappe-bench/apps
@@ -202,13 +195,10 @@ services:
     depends_on:
       configurator:
         condition: service_completed_successfully
-      mariadb:
-        condition: service_healthy
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
-    restart: ${RESTART_POLICY:-unless-stopped}
+      - mariadb
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
 
   # Scheduler - Cron job scheduler
   scheduler:
@@ -219,8 +209,9 @@ services:
     environment:
       DB_HOST: mariadb
       DB_PORT: 3306
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      REDIS_CACHE: frappe_redis_cache:6379
+      REDIS_QUEUE: frappe_redis_queue:6379
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - apps:/home/frappe/frappe-bench/apps
@@ -229,33 +220,10 @@ services:
     depends_on:
       configurator:
         condition: service_completed_successfully
-      mariadb:
-        condition: service_healthy
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
-    restart: ${RESTART_POLICY:-unless-stopped}
-
-  # phpMyAdmin (optional - for database management)
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin:latest
-    container_name: frappe_phpmyadmin
-    environment:
-      - PMA_HOST=mariadb
-      - PMA_PORT=3306
-      - PMA_USER=root
-      - PMA_PASSWORD=${MARIADB_ROOT_PASSWORD}
-      - PMA_ABSOLUTE_URI=http://${SERVER_IP}:${PHPMYADMIN_PORT:-8080}/
-    networks:
-      - frappe_network
-    ports:
-      - "${PHPMYADMIN_PORT:-8080}:80"
-    depends_on:
       - mariadb
-    restart: ${RESTART_POLICY:-unless-stopped}
-    profiles:
-      - tools
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
 
 volumes:
   mariadb_data:
