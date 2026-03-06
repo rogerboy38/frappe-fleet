@@ -85,11 +85,10 @@ services:
   frappe-web:
     image: frappe/erpnext:${FRAPPE_VERSION:-v15}
     container_name: frappe_frontend
-    entrypoint: ["docker-entrypoint.sh"]
     command: ["nginx"]
     environment:
       - BACKEND=frappe:8000
-      - FRAPPE_SITE=site1.local
+      - FRAPPE_SITE=${SITE_NAME}.local
       - SOCKETIO=frappe_socketio:9000
       - UPSTREAM_REAL_IP_ADDR=127.0.0.1
       - UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
@@ -110,11 +109,10 @@ services:
   frappe-socketio:
     image: frappe/erpnext:${FRAPPE_VERSION:-v15}
     container_name: frappe_socketio
-    entrypoint: ["docker-entrypoint.sh"]
     command: ["socketio"]
     environment:
       - SOCKETIO_PORT=9000
-      - FRAPPE_SITE=site1.local
+      - FRAPPE_SITE=${SITE_NAME}.local
       - RedisCache=redis-cache:6379
       - RedisQueue=redis-queue:6379
     volumes:
