@@ -1,4 +1,4 @@
-# Frappe Fleet Management System - Simplified Docker Configuration
+# Frappe Fleet Management System - Docker Configuration
 # ============================================================
 
 services:
@@ -42,42 +42,6 @@ services:
     volumes:
       - redis_queue_data:/data
 
-  # Configurator - Sets up bench configuration
-  configurator:
-    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-${ERPNEXT_VERSION:-v16}}
-    platform: linux/amd64
-    container_name: frappe_configurator
-    entrypoint: ["bash", "-c"]
-    command:
-      - |
-        ls -1 apps > sites/apps.txt 2>/dev/null || true;
-        bench set-config -g db_host mariadb || true;
-        bench set-config -gp db_port 3306 || true;
-        bench set-config -g redis_cache "redis://frappe_redis_cache:6379" || true;
-        bench set-config -g redis_queue "redis://frappe_redis_queue:6379" || true;
-        bench set-config -g redis_socketio "redis://frappe_redis_queue:6379" || true;
-        bench set-config -gp socketio_port 9000 || true;
-        echo "Configurator completed"
-    environment:
-      DB_HOST: mariadb
-      DB_PORT: 3306
-      REDIS_CACHE: frappe_redis_cache:6379
-      REDIS_QUEUE: frappe_redis_queue:6379
-      SOCKETIO_PORT: 9000
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - apps:/home/frappe/frappe-bench/apps
-    networks:
-      - frappe_network
-    depends_on:
-      mariadb:
-        condition: service_healthy
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
-    restart: "no"
-
   # Backend - Main Frappe application
   backend:
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-${ERPNEXT_VERSION:-v16}}
@@ -95,14 +59,9 @@ services:
     networks:
       - frappe_network
     depends_on:
-      configurator:
-        condition: service_completed_successfully
-      mariadb:
-        condition: service_healthy
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
+      - mariadb
+      - redis-cache
+      - redis-queue
     restart: unless-stopped
 
   # Frontend - Nginx web server
@@ -119,7 +78,7 @@ services:
     networks:
       - frappe_network
     ports:
-      - "8083:80"
+      - "${FRAPPE_PORT:-8083}:80"
     depends_on:
       - backend
       - websocket
@@ -144,10 +103,8 @@ services:
     networks:
       - frappe_network
     depends_on:
-      redis-cache:
-        condition: service_started
-      redis-queue:
-        condition: service_started
+      - redis-cache
+      - redis-queue
     restart: unless-stopped
 
   # Queue Short - Worker for short tasks
@@ -168,8 +125,6 @@ services:
     networks:
       - frappe_network
     depends_on:
-      configurator:
-        condition: service_completed_successfully
       - mariadb
       - redis-cache
       - redis-queue
@@ -193,8 +148,6 @@ services:
     networks:
       - frappe_network
     depends_on:
-      configurator:
-        condition: service_completed_successfully
       - mariadb
       - redis-cache
       - redis-queue
@@ -218,8 +171,6 @@ services:
     networks:
       - frappe_network
     depends_on:
-      configurator:
-        condition: service_completed_successfully
       - mariadb
       - redis-cache
       - redis-queue
