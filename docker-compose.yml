@@ -1,0 +1,221 @@
+# Frappe Fleet Management System - Production Docker Setup
+# Based on official frappe_docker configuration
+
+services:
+  # MariaDB Database
+  mariadb:
+    image: mariadb:10.11
+    container_name: frappe_mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MARIADB_DATABASE}
+      MYSQL_USER: ${MARIADB_USER}
+      MYSQL_PASSWORD: ${MARIADB_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - frappe_network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis for Cache
+  redis-cache:
+    image: redis:7-alpine
+    container_name: frappe_redis_cache
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - redis_cache_data:/data
+
+  # Redis for Queue
+  redis-queue:
+    image: redis:7-alpine
+    container_name: frappe_redis_queue
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - redis_queue_data:/data
+
+  # Redis for SocketIO
+  redis-socketio:
+    image: redis:7-alpine
+    container_name: frappe_redis_socketio
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - redis_socketio_data:/data
+
+  # Frappe Backend (Python)
+  frappe:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_backend
+    environment:
+      - MariaDB_HOST=mariadb
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - REDIS_SOCKETIO=redis-socketio:6379
+      - SITES_PATH=/home/frappe/bench/sites
+      - PYTHONPATH=/home/frappe/bench/env/bin/python
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - SKIP_SETUP=1
+    volumes:
+      - sites:/home/frappe/bench/sites
+      - apps:/home/frappe/bench/apps
+    networks:
+      - frappe_network
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+      redis-socketio:
+        condition: service_started
+    restart: unless-stopped
+
+  # Frappe Frontend (Node.js)
+  frappe-web:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_frontend
+    entrypoint: ["docker-entrypoint.sh"]
+    command: ["nginx"]
+    environment:
+      - BACKEND=frappe:8000
+      - FRAPPE_SITE=site1.local
+      - SOCKETIO=frappe_socketio:9000
+      - UPSTREAM_REAL_IP_ADDR=127.0.0.1
+      - UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
+      - PROXY_READ_TIMEOUT=300
+      - WORKER_CLASS=gthread
+      - WORKER_CONNECTIONS=100
+    volumes:
+      - sites:/home/frappe/bench/sites
+    networks:
+      - frappe_network
+    ports:
+      - "${FRAPPE_PORT:-80}:80"
+    depends_on:
+      - frappe
+    restart: unless-stopped
+
+  # SocketIO Server
+  frappe-socketio:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_socketio
+    entrypoint: ["docker-entrypoint.sh"]
+    command: ["socketio"]
+    environment:
+      - SOCKETIO_PORT=9000
+      - FRAPPE_SITE=site1.local
+      - RedisCache=redis-cache:6379
+      - RedisQueue=redis-queue:6379
+    volumes:
+      - sites:/home/frappe/bench/sites
+    networks:
+      - frappe_network
+    depends_on:
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
+
+  # Worker for background jobs
+  frappe-worker:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_worker
+    command: ["worker", "--queue", "all"]
+    environment:
+      - MariaDB_HOST=mariadb
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - WORKER_CLASS=gthread
+    volumes:
+      - sites:/home/frappe/bench/sites
+      - apps:/home/frappe/bench/apps
+    networks:
+      - frappe_network
+    depends_on:
+      - mariadb
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
+
+  # Worker for short jobs
+  frappe-worker-default:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_worker_default
+    command: ["worker", "--queue", "default"]
+    environment:
+      - MariaDB_HOST=mariadb
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - WORKER_CLASS=gthread
+    volumes:
+      - sites:/home/frappe/bench/sites
+      - apps:/home/frappe/bench/apps
+    networks:
+      - frappe_network
+    depends_on:
+      - mariadb
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
+
+  # Scheduler for cron jobs
+  frappe-scheduler:
+    image: frappe/erpnext:${FRAPPE_VERSION:-v15}
+    container_name: frappe_scheduler
+    command: ["scheduler"]
+    environment:
+      - MariaDB_HOST=mariadb
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+    volumes:
+      - sites:/home/frappe/bench/sites
+      - apps:/home/frappe/bench/apps
+    networks:
+      - frappe_network
+    depends_on:
+      - mariadb
+      - redis-cache
+      - redis-queue
+    restart: unless-stopped
+
+  # phpMyAdmin (optional - for database management)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: frappe_phpmyadmin
+    environment:
+      - PMA_HOST=mariadb
+      - PMA_PORT=3306
+      - PMA_USER=root
+      - PMA_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - PMA_ABSOLUTE_URI=http://${SERVER_IP}:${PHPMYADMIN_PORT:-8080}/
+    networks:
+      - frappe_network
+    ports:
+      - "${PHPMYADMIN_PORT:-8080}:80"
+    depends_on:
+      - mariadb
+    restart: unless-stopped
+    profiles:
+      - tools
+
+volumes:
+  mariadb_data:
+  redis_cache_data:
+  redis_queue_data:
+  redis_socketio_data:
+  sites:
+  apps:
+
+networks:
+  frappe_network:
+    driver: bridge
