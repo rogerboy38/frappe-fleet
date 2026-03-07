@@ -7,7 +7,7 @@ Este proyecto proporciona una configuración completa de Docker para ejecutar el
 - **Servidor**: VPS con Ubuntu 24.04 (tu servidor actual)
 - **Recursos**: 8 núcleos, 32GB RAM, 400GB SSD
 - **Docker**: Docker y Docker Compose instalados
-- **Puertos**: 80 (HTTP), 8080 (phpMyAdmin opcional)
+- **Puertos**: 80 o 8083 (HTTP), 8080 (phpMyAdmin opcional)
 
 ## Arquitectura de Servicios
 
@@ -74,7 +74,7 @@ docker compose ps
 
 ### 3. Acceder al Sistema
 
-- **ERPNext**: http://187.77.2.74
+- **ERPNext**: http://187.77.2.74:8083
 - **phpMyAdmin**: http://187.77.2.74:8080
 - **Usuario**: Administrator
 - **Contraseña**: La que configuraste en ADMIN_PASSWORD
@@ -165,7 +165,7 @@ El sistema puede integrarse con tu n8n existente para automatizaciones:
 docker compose logs
 
 # Verificar puertos
-netstat -tlnp | grep -E ':(80|3306|6379)'
+netstat -tlnp | grep -E ':(8083|3306|6379)'
 ```
 
 ### Error de conexión a base de datos
@@ -222,8 +222,8 @@ docker exec -i frappe_mariadb mysql -u root -p erpnext < backup_20240315.sql
 
 | Componente | Versión | Propósito |
 |------------|---------|-----------|
-| Frappe | v15 | Framework backend |
-| ERPNext | v15 | Sistema ERP base |
+| Frappe | v16 | Framework backend |
+| ERPNext | v16 | Sistema ERP base |
 | MariaDB | 10.11 | Base de datos |
 | Redis | 7-alpine | Cache y colas |
 | Nginx | Incluido | Servidor web |
